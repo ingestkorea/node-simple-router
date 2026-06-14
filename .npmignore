@@ -1,0 +1,4 @@
+# Tests
+dist-cjs/test/
+dist-es/test/
+dist-types/test/
