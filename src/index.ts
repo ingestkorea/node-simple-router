@@ -221,7 +221,7 @@ export class NodeSimpleRouter {
     server.headersTimeout = this.config.httpOptions.headersTimeout;
     server.maxRequestsPerSocket = this.config.httpOptions.maxRequestsPerSocket;
 
-    return server.listen(port, callback);
+    return server.listen(port, "0.0.0.0", callback);
   }
 }
 
@@ -300,7 +300,10 @@ const resolveNodeRequest = async (nodeReq: http.IncomingMessage, ignore: boolean
 
   return {
     method,
-    headers,
+    headers: {
+      ...headers,
+      "x-real-ip": (nodeReq.headers["x-real-ip"] as string) || (nodeReq.socket.remoteAddress as string),
+    },
     pathname,
     params,
     query,

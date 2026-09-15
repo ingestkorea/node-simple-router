@@ -1,6 +1,6 @@
 {
   "name": "@ingestkorea/node-simple-router",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Lightweight, zero-dependency native HTTP router for Node.js.",
   "engines": {
     "node": ">=22"
