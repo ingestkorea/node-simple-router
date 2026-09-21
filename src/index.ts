@@ -57,6 +57,8 @@ export class NodeSimpleRouter {
   private middlewareStack: MiddlewareWithPrefix[] = [];
   private ignoreTrailingSlash = true;
   private onErrorHandler: ErrorHandler | null = null;
+  private response = buildProxyResponse(200);
+  private responseErr = buildProxyResponse(500);
 
   constructor(config?: NodeSimpleRouterConfig) {
     this.config = {
@@ -69,7 +71,7 @@ export class NodeSimpleRouter {
     };
 
     if (this.config.extended) {
-      this.middlewareStack.push({ prefix: "/", middlewares: [requestIdMiddleware()] });
+      this.middlewareStack.push({ prefix: "/", middlewares: [middlewareLoggerPlugin()] });
     }
   }
 
@@ -81,7 +83,9 @@ export class NodeSimpleRouter {
   use(prefixOrMw: string | Middleware, ...middlewares: Middleware[]) {
     if (typeof prefixOrMw === "string") {
       const prefix = normalizePrefix(prefixOrMw, this.ignoreTrailingSlash);
-      if (!middlewares.length) throw new Error("At least one middleware required");
+      if (!middlewares.length) {
+        throw new Error("At least one middleware required");
+      }
       this.middlewareStack.push({ prefix, middlewares });
     } else {
       const list = [prefixOrMw, ...middlewares];
@@ -160,24 +164,8 @@ export class NodeSimpleRouter {
           finalHandler = methodMismatch ? notAllowedHandler([...methodMismatch]) : notFoundHandler();
         }
 
-        const response: ProxyResponse = {
-          json(data, options) {
-            return {
-              code: options?.code || 200,
-              headers: { ...options?.headers, "content-type": "application/json; charset=utf-8" },
-              body: JSON.stringify(data || {}),
-            };
-          },
-          send(data, options) {
-            return {
-              code: options?.code || 200,
-              headers: { ...options?.headers, "content-type": "text/plain; charset=utf-8" },
-              body: data ?? undefined,
-            };
-          },
-        };
         const handler = composeMiddleware(middlewares, finalHandler);
-        const result = await handler(request, response);
+        const result = await handler(request, this.response);
 
         if (!nodeRes.writableEnded) {
           nodeRes.writeHead(result.code, result.headers);
@@ -185,23 +173,7 @@ export class NodeSimpleRouter {
         }
       } catch (err) {
         if (this.onErrorHandler) {
-          const response: ProxyResponse = {
-            json(data, options) {
-              return {
-                code: options?.code || 500,
-                headers: { ...options?.headers, "content-type": "application/json; charset=utf-8" },
-                body: JSON.stringify(data || {}),
-              };
-            },
-            send(data, options) {
-              return {
-                code: options?.code || 500,
-                headers: { ...options?.headers, "content-type": "text/plain; charset=utf-8" },
-                body: data ?? undefined,
-              };
-            },
-          };
-          const result = await this.onErrorHandler(request, response, err);
+          const result = await this.onErrorHandler(request, this.responseErr, err);
           if (!nodeRes.writableEnded) {
             nodeRes.writeHead(result.code, result.headers);
             nodeRes.end(result.body);
@@ -209,10 +181,11 @@ export class NodeSimpleRouter {
           return;
         }
 
-        console.error("Error:", err);
+        console.error(err);
         if (!nodeRes.writableEnded) {
+          const body = JSON.stringify({ message: "Internal Server Error" });
           nodeRes.writeHead(500, { "content-type": "application/json; charset=utf-8" });
-          nodeRes.end();
+          nodeRes.end(body);
         }
       }
     });
@@ -224,6 +197,25 @@ export class NodeSimpleRouter {
     return server.listen(port, "0.0.0.0", callback);
   }
 }
+
+const buildProxyResponse = (defaultCode: number = 200): ProxyResponse => {
+  return {
+    json(data, options) {
+      return {
+        code: options?.code || defaultCode,
+        headers: { ...options?.headers, "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify(data || {}),
+      };
+    },
+    send(data, options) {
+      return {
+        code: options?.code || defaultCode,
+        headers: { ...options?.headers, "content-type": "text/plain; charset=utf-8" },
+        body: data ?? undefined,
+      };
+    },
+  };
+};
 
 const composeMiddleware = (middlewares: Middleware[], finalHandler: Handler): Handler => {
   const handler = middlewares.reduceRight((next, middleware) => {
@@ -257,27 +249,22 @@ const notAllowedHandler = (methods: Method[]): Handler => {
   };
 };
 
-const requestIdMiddleware = (): Middleware => (next) => async (req, res) => {
-  const start = Date.now();
-  const uuid = crypto.randomUUID();
-
-  const requestId = "x-request-id";
-  const poweredBy = "x-powered-by";
-  const duration = "x-duration-ms";
-
-  req.headers = {
-    ...req.headers,
-    [requestId]: uuid,
-  };
+const middlewareLoggerPlugin = (): Middleware => (next) => async (req, res) => {
+  const start = new Date();
+  const path = `${req.method} ${req.pathname}`;
+  const hostname = req.headers["hostname"] || req.headers["host"]?.split(":")[0];
 
   const upstream = await next(req, res);
 
-  upstream.headers = {
-    ...upstream.headers,
-    [requestId]: uuid,
-    [poweredBy]: "@ingestkorea/node-simple-router",
-    [duration]: (Date.now() - start).toString(),
+  const message = {
+    timestamp: start.toISOString(),
+    code: upstream.code,
+    path: path,
+    hostname: hostname || "unknown",
+    duration: (Date.now() - start.getTime()).toString(),
   };
+
+  console.log(JSON.stringify(message));
 
   return upstream;
 };

@@ -14,29 +14,49 @@ npm install @ingestkorea/node-simple-router
 ```
 
 ```ts
-import { NodeSimpleRouter } from "@ingestkorea/node-simple-router";
+import { NodeSimpleRouter, Middleware } from "@ingestkorea/node-simple-router";
 
 const port = 3000;
-const app = new NodeSimpleRouter();
+const app = new NodeSimpleRouter({
+  extended: true, // optional
+});
 
-app.use("/", (next) => async (req, res) => {
+const middlewareHealth: Middleware = (next) => async (req, res) => {
   if (req.method == "HEAD") {
     return res.send(null);
   }
-
   return next(req, res);
+};
+
+app.use("/", middlewareHealth);
+
+apapp.get("/", (req, res) => {
+  return res.json({ ok: true });
 });
 
-app.get("/", (req, res) => {
-  return res.json(req);
+app.get("/error", (req, res) => {
+  throw new Error("error test");
 });
 
 app.onError((req, res, err) => {
-  console.error(`[error]: ${req.method} ${req.pathname} - ${(err as any)?.message || String(err)}`);
-  return res.json({ message: "something wrong" }, { code: 400 });
+  const message = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    code: 500,
+    path: `${req.method} ${req.pathname}`,
+    message: err instanceof Error ? err.stack : String(err),
+  });
+  console.error(message);
+
+  const body = { ok: false, message: "something wrong" };
+  return res.json(body, { code: 400 });
 });
 
 app.listen(port, () => {
-  console.log(`app listening on port ${port}`);
+  const message = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    port: port,
+    message: "server start",
+  });
+  console.log(message);
 });
 ```
