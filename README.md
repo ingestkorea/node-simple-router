@@ -19,7 +19,6 @@ import { NodeSimpleRouter, Middleware, Result } from "@ingestkorea/node-simple-r
 const port = 3000;
 const app = new NodeSimpleRouter({
   debug: true, // default false
-  // extended: true, // deprecated
 });
 
 const middlewareHealth: Middleware = (next) => async (req, res, context) => {

@@ -9,10 +9,19 @@ import {
   QueryString,
   Cookie,
 } from "./models/proxy.js";
-import { Context, Handler, Middleware, ErrorHandler, Token, Router, MiddlewareWithPrefix } from "./models/router.js";
+import {
+  Context,
+  Handler,
+  Middleware,
+  ErrorHandler,
+  ErrorMiddleware,
+  Token,
+  Router,
+  MiddlewareWithPrefix,
+} from "./models/router.js";
 import { Fail } from "./models/api.js";
-import { middlewareLoggerPlugin, middlewareTraceId } from "./middlewares/index.js";
-import { IK_TRACE_ID, REAL_IP } from "./constants.js";
+import { middlewareLoggerPlugin, middlewareTraceId, middlewareErrorTraceId } from "./middlewares/index.js";
+import { REAL_IP } from "./constants.js";
 
 type NodeSimpleRouterConfig = {
   debug?: boolean;
@@ -43,7 +52,7 @@ export class NodeSimpleRouter {
       httpOptions: {
         keepAliveTimeout: config?.httpOptions?.keepAliveTimeout ?? 5000,
         headersTimeout: config?.httpOptions?.headersTimeout ?? 7000,
-        maxRequestsPerSocket: config?.httpOptions?.maxRequestsPerSocket ?? 100,
+        maxRequestsPerSocket: config?.httpOptions?.maxRequestsPerSocket ?? 1000,
       },
     };
 
@@ -112,7 +121,10 @@ export class NodeSimpleRouter {
 
   listen(port: number, callback?: () => void) {
     const server = http.createServer(async (nodeReq, nodeRes) => {
-      const context: Context = { traceId: randomUUID().replaceAll("-", "") };
+      const context: Context = {
+        traceId: randomUUID().replaceAll("-", ""),
+        requestAt: Date.now(),
+      };
       const request: ProxyRequest = await resolveNodeRequest(nodeReq, this.ignoreTrailingSlash);
 
       let methodMismatch: Set<Method> | null = null;
@@ -158,9 +170,8 @@ export class NodeSimpleRouter {
           nodeRes.end(result.body);
         }
       } catch (err) {
-        request.headers[IK_TRACE_ID] = context.traceId;
-        const result = await this.onErrorHandler(request, this.responseErr, err, context);
-        result.headers[IK_TRACE_ID] = context.traceId;
+        const handler = composeErrorMiddleware([middlewareErrorTraceId], this.onErrorHandler);
+        const result = await handler(request, this.responseErr, err, context);
 
         if (!nodeRes.writableEnded) {
           nodeRes.writeHead(result.code, result.headers);
@@ -197,6 +208,13 @@ const buildProxyResponse = (defaultCode: number = 200): ProxyResponse => {
 };
 
 const composeMiddleware = (middlewares: Middleware[], finalHandler: Handler): Handler => {
+  const handler = middlewares.reduceRight((next, middleware) => {
+    return middleware(next);
+  }, finalHandler);
+  return handler;
+};
+
+const composeErrorMiddleware = (middlewares: ErrorMiddleware[], finalHandler: ErrorHandler): ErrorHandler => {
   const handler = middlewares.reduceRight((next, middleware) => {
     return middleware(next);
   }, finalHandler);
