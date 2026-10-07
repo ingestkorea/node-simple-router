@@ -20,8 +20,13 @@ import {
   MiddlewareWithPrefix,
 } from "./models/router.js";
 import { Fail } from "./models/api.js";
-import { middlewareLoggerPlugin, middlewareTraceId, middlewareErrorTraceId } from "./middlewares/index.js";
-import { REAL_IP } from "./constants.js";
+import {
+  middlewareLogger,
+  middlewareTraceId,
+  middlewareErrorLogger,
+  middlewareErrorTraceId,
+} from "./middlewares/index.js";
+import { REAL_IP, IK_TRACE_ID } from "./constants.js";
 
 type NodeSimpleRouterConfig = {
   debug?: boolean;
@@ -41,6 +46,7 @@ export class NodeSimpleRouter {
   private routes: Router[] = [];
   private middlewareStack: MiddlewareWithPrefix[] = [];
   private ignoreTrailingSlash = true;
+  private errorMiddlewares: ErrorMiddleware[] = [];
   private onErrorHandler: ErrorHandler = defaultErrorHandler;
   private response = buildProxyResponse(200);
   private responseErr = buildProxyResponse(500);
@@ -63,10 +69,12 @@ export class NodeSimpleRouter {
     }
 
     if (this.config.extended || this.config.debug) {
-      this.middlewareStack.push({ prefix: "/", middlewares: [middlewareLoggerPlugin()] });
+      this.middlewareStack.push({ prefix: "/", middlewares: [middlewareLogger] });
+      this.errorMiddlewares.push(middlewareErrorLogger);
     }
 
     this.middlewareStack.push({ prefix: "/", middlewares: [middlewareTraceId] });
+    this.errorMiddlewares.push(middlewareErrorTraceId);
   }
 
   onError(errorHandler: ErrorHandler) {
@@ -121,11 +129,11 @@ export class NodeSimpleRouter {
 
   listen(port: number, callback?: () => void) {
     const server = http.createServer(async (nodeReq, nodeRes) => {
+      const request: ProxyRequest = await resolveNodeRequest(nodeReq, this.ignoreTrailingSlash);
       const context: Context = {
-        traceId: randomUUID().replaceAll("-", ""),
+        traceId: request.headers[IK_TRACE_ID] || randomUUID().replaceAll("-", ""),
         requestAt: Date.now(),
       };
-      const request: ProxyRequest = await resolveNodeRequest(nodeReq, this.ignoreTrailingSlash);
 
       let methodMismatch: Set<Method> | null = null;
       let matchedRoute: Router | null = null;
@@ -170,7 +178,7 @@ export class NodeSimpleRouter {
           nodeRes.end(result.body);
         }
       } catch (err) {
-        const handler = composeErrorMiddleware([middlewareErrorTraceId], this.onErrorHandler);
+        const handler = composeErrorMiddleware(this.errorMiddlewares, this.onErrorHandler);
         const result = await handler(request, this.responseErr, err, context);
 
         if (!nodeRes.writableEnded) {
